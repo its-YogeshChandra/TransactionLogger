@@ -1,0 +1,1 @@
+//struct for replica account
