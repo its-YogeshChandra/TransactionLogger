@@ -1,13 +1,15 @@
 //main file to write the value
 use solana_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, ReplicaAccountInfo, ReplicaTransactionInfo,
+    ReplicaTransactionInfoV2, ReplicaTransactionInfoVersions,
 };
-use solana_logger::setup;
+use solana_program::pubkey::Pubkey;
 use std::sync::{Arc, Mutex};
 mod config;
+mod plugin;
+use config::makeconfig;
 
-use config::{Config, makeconfig};
-
+const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 // the main brain struct
 #[derive(Debug)]
 pub struct DataStruct {
@@ -18,6 +20,8 @@ pub struct DataStruct {
     error_count: u8,
     total_transaction_processed: u8,
 }
+
+use solana_program::clock::Slot;
 
 #[derive(Debug)]
 pub struct MainState {
@@ -43,5 +47,63 @@ impl GeyserPlugin for MainState {
         //add the database_url to the main state struct
         self.state.lock().unwrap().database_url = data.database_url;
         Ok(())
+    }
+
+    //the main notify_transaction method
+    fn notify_transaction(
+        &self,
+        transaction: solana_geyser_plugin_interface::geyser_plugin_interface::ReplicaTransactionInfoVersions,
+        slot: Slot,
+    ) -> solana_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
+        let data = match transaction {
+            ReplicaTransactionInfoVersions::V0_0_1(info) => {}
+            ReplicaTransactionInfoVersions::V0_0_2(info) => {
+                self::MainState::process_manager(&info);
+            }
+        };
+
+        Ok(())
+    }
+}
+
+impl MainState {
+    pub fn process_manager(info: &ReplicaTransactionInfoV2) {
+        let meta = info.transaction_status_meta;
+        if let Some(post_balance) = &meta.post_token_balances {
+            //loop the post balance
+            for balance in post_balance {
+                if balance.mint == USDC_MINT {
+                    //calculate the balance difference
+
+                    let pre_balance_amount = meta
+                        .pre_token_balances
+                        .as_ref()
+                        .and_then(|pres| {
+                            pres.iter()
+                                .find(|p| p.account_index == balance.account_index)
+                        })
+                        .map(|p| p.ui_token_amount.amount.parse::<u64>().unwrap_or(0));
+
+                    let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+
+                    //comapre the amounts
+                    if post_amount > pre_balance_amount.unwrap() {
+                        let diff = post_amount - pre_balance_amount.unwrap();
+
+                        if diff > 1_000_000_000 {
+                            let accounts_keys = info.transaction.message().account_keys();
+                            let owner_address =
+                                accounts_keys.get(balance.account_index as usize).unwrap();
+
+                            println!(
+                                "ALERT! USER : {:?} |  RECEIVED: {} USDC",
+                                owner_address,
+                                diff / 1_000_000
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
