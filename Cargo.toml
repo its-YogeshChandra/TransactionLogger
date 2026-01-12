@@ -9,4 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bs58 = "0.5.1"
+figment = {version = "0.10.19", features = ["toml","env"]}
+serde = "1.0.228"
 solana-geyser-plugin-interface = "1.18.26"
+solana-logger = "3.0.0"
