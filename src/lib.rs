@@ -61,12 +61,19 @@ impl GeyserPlugin for MainState {
         transaction: agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaTransactionInfoVersions,
         slot: Slot,
     ) -> agave_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
+        // DEBUG: Log EVERY transaction that comes in
+        eprintln!("📥 PLUGIN: notify_transaction called at slot {}", slot);
+        
         match transaction {
-            ReplicaTransactionInfoVersions::V0_0_1(_) => {}
+            ReplicaTransactionInfoVersions::V0_0_1(_) => {
+                eprintln!("  └─ Version: V0_0_1 (skipped)");
+            }
             ReplicaTransactionInfoVersions::V0_0_2(info) => {
+                eprintln!("  └─ Version: V0_0_2, sig: {:?}", info.signature);
                 self.process_manager_v2(&info, slot);
             }
             ReplicaTransactionInfoVersions::V0_0_3(info) => {
+                eprintln!("  └─ Version: V0_0_3, sig: {:?}", info.signature);
                 self.process_manager_v3(&info, slot);
             }
         };
@@ -77,40 +84,49 @@ impl GeyserPlugin for MainState {
 impl MainState {
     fn process_manager_v2(&self, info: &ReplicaTransactionInfoV2, slot: Slot) {
         let meta = info.transaction_status_meta;
+        
+        // DEBUG: Check if we have token balances
+        eprintln!("    📊 V2 Processing - has post_token_balances: {}", meta.post_token_balances.is_some());
+        
         if let Some(post_balance) = &meta.post_token_balances {
+            eprintln!("    📊 Found {} post_token_balances", post_balance.len());
+            
             for balance in post_balance {
-                if true {
-                    // Track all tokens for testing
-                    let pre_balance_amount = meta
-                        .pre_token_balances
-                        .as_ref()
-                        .and_then(|pres| {
-                            pres.iter()
-                                .find(|p| p.account_index == balance.account_index)
-                        })
-                        .map(|p| p.ui_token_amount.amount.parse::<u64>().unwrap_or(0));
+                eprintln!("      └─ Token balance entry, account_index: {}", balance.account_index);
+                
+                // Track all tokens for testing
+                let pre_balance_amount = meta
+                    .pre_token_balances
+                    .as_ref()
+                    .and_then(|pres| {
+                        pres.iter()
+                            .find(|p| p.account_index == balance.account_index)
+                    })
+                    .map(|p| p.ui_token_amount.amount.parse::<u64>().unwrap_or(0));
 
-                    let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+                let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+                
+                eprintln!("      └─ Pre: {:?}, Post: {}", pre_balance_amount, post_amount);
 
-                    if let Some(pre_amount) = pre_balance_amount {
-                        // Only trigger if pre_amount > 0 (not a mint)
-                        if pre_amount > 0 && post_amount > pre_amount {
-                            let diff = post_amount - pre_amount;
-                            if diff > 1_000_000_000 {
-                                let account_keys = info.transaction.message().account_keys();
-                                if let Some(owner) =
-                                    account_keys.get(balance.account_index as usize)
-                                {
-                                    let message = format!(
-                                        "WHALE ALERT | Slot: {} | Tx: {:?} | User: {:?} | Amount: {} USDC\n",
-                                        slot, info.signature, owner, diff / 1_000_000
-                                    );
-                                    eprintln!("🐋 {}", message);
-                                    let mut state = self.state.lock().unwrap();
-                                    if let Some(file) = &mut state.txlog_file {
-                                        let _ = file.write_all(message.as_bytes());
-                                    }
-                                }
+                if let Some(pre_amount) = pre_balance_amount {
+                    if post_amount != pre_amount {
+                        let diff = if post_amount > pre_amount {
+                            post_amount - pre_amount
+                        } else {
+                            pre_amount - post_amount
+                        };
+                        
+                        // Log ALL balance changes for debugging (threshold = 0)
+                        let account_keys = info.transaction.message().account_keys();
+                        if let Some(owner) = account_keys.get(balance.account_index as usize) {
+                            let message = format!(
+                                "TOKEN CHANGE | Slot: {} | Tx: {:?} | Account: {:?} | Pre: {} | Post: {} | Diff: {}\n",
+                                slot, info.signature, owner, pre_amount, post_amount, diff
+                            );
+                            eprintln!("� {}", message);
+                            let mut state = self.state.lock().unwrap();
+                            if let Some(file) = &mut state.txlog_file {
+                                let _ = file.write_all(message.as_bytes());
                             }
                         }
                     }
@@ -121,40 +137,47 @@ impl MainState {
 
     fn process_manager_v3(&self, info: &ReplicaTransactionInfoV3, slot: Slot) {
         let meta = info.transaction_status_meta;
+        
+        // DEBUG: Check if we have token balances
+        eprintln!("    📊 V3 Processing - has post_token_balances: {}", meta.post_token_balances.is_some());
+        
         if let Some(post_balance) = &meta.post_token_balances {
+            eprintln!("    📊 Found {} post_token_balances", post_balance.len());
+            
             for balance in post_balance {
-                if true {
-                    // Track all tokens for testing
-                    let pre_balance_amount = meta
-                        .pre_token_balances
-                        .as_ref()
-                        .and_then(|pres| {
-                            pres.iter()
-                                .find(|p| p.account_index == balance.account_index)
-                        })
-                        .map(|p| p.ui_token_amount.amount.parse::<u64>().unwrap_or(0));
+                eprintln!("      └─ Token balance entry, account_index: {}", balance.account_index);
+                
+                let pre_balance_amount = meta
+                    .pre_token_balances
+                    .as_ref()
+                    .and_then(|pres| {
+                        pres.iter()
+                            .find(|p| p.account_index == balance.account_index)
+                    })
+                    .map(|p| p.ui_token_amount.amount.parse::<u64>().unwrap_or(0));
 
-                    let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+                let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+                
+                eprintln!("      └─ Pre: {:?}, Post: {}", pre_balance_amount, post_amount);
 
-                    if let Some(pre_amount) = pre_balance_amount {
-                        // Only trigger if pre_amount > 0 (not a mint)
-                        if pre_amount > 0 && post_amount > pre_amount {
-                            let diff = post_amount - pre_amount;
-                            if diff > 1_000_000_000 {
-                                let account_keys = info.transaction.message.static_account_keys();
-                                if let Some(owner) =
-                                    account_keys.get(balance.account_index as usize)
-                                {
-                                    let message = format!(
-                                        "WHALE ALERT | Slot: {} | Tx: {:?} | User: {:?} | Amount: {} USDC\n",
-                                        slot, info.signature, owner, diff / 1_000_000
-                                    );
-                                    eprintln!("🐋 {}", message);
-                                    let mut state = self.state.lock().unwrap();
-                                    if let Some(file) = &mut state.txlog_file {
-                                        let _ = file.write_all(message.as_bytes());
-                                    }
-                                }
+                if let Some(pre_amount) = pre_balance_amount {
+                    if post_amount != pre_amount {
+                        let diff = if post_amount > pre_amount {
+                            post_amount - pre_amount
+                        } else {
+                            pre_amount - post_amount
+                        };
+                        
+                        let account_keys = info.transaction.message.static_account_keys();
+                        if let Some(owner) = account_keys.get(balance.account_index as usize) {
+                            let message = format!(
+                                "TOKEN CHANGE | Slot: {} | Tx: {:?} | Account: {:?} | Pre: {} | Post: {} | Diff: {}\n",
+                                slot, info.signature, owner, pre_amount, post_amount, diff
+                            );
+                            eprintln!("� {}", message);
+                            let mut state = self.state.lock().unwrap();
+                            if let Some(file) = &mut state.txlog_file {
+                                let _ = file.write_all(message.as_bytes());
                             }
                         }
                     }
