@@ -1,96 +1,86 @@
 //main file to write the value
-use solana_geyser_plugin_interface::geyser_plugin_interface::{
-    GeyserPlugin, GeyserPluginError, ReplicaAccountInfo, ReplicaTransactionInfo,
-    ReplicaTransactionInfoV2, ReplicaTransactionInfoVersions,
+use agave_geyser_plugin_interface::geyser_plugin_interface::{
+    GeyserPlugin, GeyserPluginError, ReplicaTransactionInfoV2, ReplicaTransactionInfoV3,
+    ReplicaTransactionInfoVersions,
 };
-use solana_program::pubkey::Pubkey;
+use solana_clock::Slot;
 use std::sync::{Arc, Mutex};
 mod config;
-mod database;
-mod plugin;
 use config::makeconfig;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
 const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-// the main brain struct
+
 #[derive(Debug)]
 pub struct DataStruct {
-    //figure the issue
     database_url: String,
-    tempstorage: String,
-    last_successful_update_time: u8,
     error_count: u8,
-    total_transaction_processed: u8,
     txlog_file: Option<File>,
 }
-
-use solana_program::clock::Slot;
 
 #[derive(Debug)]
 pub struct MainState {
     state: Arc<Mutex<DataStruct>>,
 }
+
 impl GeyserPlugin for MainState {
-    //gets the name for the plugin
     fn name(&self) -> &'static str {
-        let name = "txlogger";
-        name
+        "txlogger"
     }
 
-    // the main onload method
     fn on_load(
         &mut self,
         _config_file: &str,
         _is_reload: bool,
-    ) -> solana_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
-        //call the function to create struct from config.rs
+    ) -> agave_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
         let data = makeconfig(_config_file)
             .map_err(|e| GeyserPluginError::ConfigFileReadError { msg: e.to_string() })?;
 
-        //add the database_url to the main state struct
         self.state.lock().unwrap().database_url = data.database_url;
 
-        // 1. Open the file ONCE
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open("whale_alerts.txt")
             .map_err(|e| GeyserPluginError::ConfigFileReadError { msg: e.to_string() })?;
 
-        // 2. Save it into your state
         let mut state = self.state.lock().unwrap();
         state.txlog_file = Some(file);
 
+        eprintln!("🔔 PLUGIN: on_load complete!");
         Ok(())
     }
 
-    //the main notify_transaction method
+    fn transaction_notifications_enabled(&self) -> bool {
+        true
+    }
+
     fn notify_transaction(
         &self,
-        transaction: solana_geyser_plugin_interface::geyser_plugin_interface::ReplicaTransactionInfoVersions,
+        transaction: agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaTransactionInfoVersions,
         slot: Slot,
-    ) -> solana_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
-        let data = match transaction {
-            ReplicaTransactionInfoVersions::V0_0_1(info) => {}
+    ) -> agave_geyser_plugin_interface::geyser_plugin_interface::Result<()> {
+        match transaction {
+            ReplicaTransactionInfoVersions::V0_0_1(_) => {}
             ReplicaTransactionInfoVersions::V0_0_2(info) => {
-                self::MainState::process_manager(self, &info);
+                self.process_manager_v2(&info, slot);
+            }
+            ReplicaTransactionInfoVersions::V0_0_3(info) => {
+                self.process_manager_v3(&info, slot);
             }
         };
-
         Ok(())
     }
 }
 
 impl MainState {
-    pub fn process_manager(&self, info: &ReplicaTransactionInfoV2) {
+    fn process_manager_v2(&self, info: &ReplicaTransactionInfoV2, slot: Slot) {
         let meta = info.transaction_status_meta;
         if let Some(post_balance) = &meta.post_token_balances {
-            //loop the post balance
             for balance in post_balance {
-                if balance.mint == USDC_MINT {
-                    //calculate the balance difference
-
+                if true {
+                    // Track all tokens for testing
                     let pre_balance_amount = meta
                         .pre_token_balances
                         .as_ref()
@@ -102,38 +92,94 @@ impl MainState {
 
                     let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
 
-                    //comapre the amounts
-                    if post_amount > pre_balance_amount.unwrap() {
-                        let diff = post_amount - pre_balance_amount.unwrap();
-
-                        if diff > 1_000_000_000 {
-                            let accounts_keys = info.transaction.message().account_keys();
-                            let owner_address =
-                                accounts_keys.get(balance.account_index as usize).unwrap();
-
-                            //append data to a txt file -- for now --
-                            let message = format!(
-                                "WHALE ALERT | Slot: {} | Tx: {:?} | User: {:?} | Amount: {} USDC\n",
-                                0, // You can pass 'slot' to this function if you want precise slot numbers
-                                info.signature,
-                                owner_address,
-                                diff / 1_000_000
-                            );
-
-                            let mut state = self.state.lock().unwrap();
-                            if let Some(file) = &mut state.txlog_file {
-                                let _ = file.write_all(message.as_bytes());
+                    if let Some(pre_amount) = pre_balance_amount {
+                        // Only trigger if pre_amount > 0 (not a mint)
+                        if pre_amount > 0 && post_amount > pre_amount {
+                            let diff = post_amount - pre_amount;
+                            if diff > 1_000_000_000 {
+                                let account_keys = info.transaction.message().account_keys();
+                                if let Some(owner) =
+                                    account_keys.get(balance.account_index as usize)
+                                {
+                                    let message = format!(
+                                        "WHALE ALERT | Slot: {} | Tx: {:?} | User: {:?} | Amount: {} USDC\n",
+                                        slot, info.signature, owner, diff / 1_000_000
+                                    );
+                                    eprintln!("🐋 {}", message);
+                                    let mut state = self.state.lock().unwrap();
+                                    if let Some(file) = &mut state.txlog_file {
+                                        let _ = file.write_all(message.as_bytes());
+                                    }
+                                }
                             }
-
-                            println!(
-                                "ALERT! USER : {:?} |  RECEIVED: {} USDC",
-                                owner_address,
-                                diff / 1_000_000
-                            )
                         }
                     }
                 }
             }
         }
     }
+
+    fn process_manager_v3(&self, info: &ReplicaTransactionInfoV3, slot: Slot) {
+        let meta = info.transaction_status_meta;
+        if let Some(post_balance) = &meta.post_token_balances {
+            for balance in post_balance {
+                if true {
+                    // Track all tokens for testing
+                    let pre_balance_amount = meta
+                        .pre_token_balances
+                        .as_ref()
+                        .and_then(|pres| {
+                            pres.iter()
+                                .find(|p| p.account_index == balance.account_index)
+                        })
+                        .map(|p| p.ui_token_amount.amount.parse::<u64>().unwrap_or(0));
+
+                    let post_amount = balance.ui_token_amount.amount.parse::<u64>().unwrap_or(0);
+
+                    if let Some(pre_amount) = pre_balance_amount {
+                        // Only trigger if pre_amount > 0 (not a mint)
+                        if pre_amount > 0 && post_amount > pre_amount {
+                            let diff = post_amount - pre_amount;
+                            if diff > 1_000_000_000 {
+                                let account_keys = info.transaction.message.static_account_keys();
+                                if let Some(owner) =
+                                    account_keys.get(balance.account_index as usize)
+                                {
+                                    let message = format!(
+                                        "WHALE ALERT | Slot: {} | Tx: {:?} | User: {:?} | Amount: {} USDC\n",
+                                        slot, info.signature, owner, diff / 1_000_000
+                                    );
+                                    eprintln!("🐋 {}", message);
+                                    let mut state = self.state.lock().unwrap();
+                                    if let Some(file) = &mut state.txlog_file {
+                                        let _ = file.write_all(message.as_bytes());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Default for MainState {
+    fn default() -> Self {
+        MainState {
+            state: Arc::new(Mutex::new(DataStruct {
+                database_url: String::new(),
+                error_count: 0,
+                txlog_file: None,
+            })),
+        }
+    }
+}
+
+#[no_mangle]
+#[allow(improper_ctypes_definitions)]
+pub unsafe extern "C" fn _create_plugin() -> *mut dyn GeyserPlugin {
+    let plugin = MainState::default();
+    let boxed: Box<dyn GeyserPlugin> = Box::new(plugin);
+    Box::into_raw(boxed)
 }

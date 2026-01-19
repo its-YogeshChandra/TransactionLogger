@@ -1,0 +1,4 @@
+{
+    "libpath": "/Users/test/Documents/openSource/plugins/target/release/libtransactionlogger.dylib",
+    "database_url": "postgres://user:password@localhost:5432/solana_db"
+}
